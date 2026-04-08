@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum TipoUsuario {
+  admin
+  empresa
+  elaborador
+  visualizador
+}
+
+enum EstadoProyecto {
+  cotizacion
+  aprobado
+  en_progreso
+  en_revision
+  entregado
+  cancelado
+}
+
+enum PrioridadProyecto {
+  baja
+  media
+  alta
+  critica
+}
+
+enum TipoHerramienta {
+  power_bi
+  tableau
+  looker
+  custom_web
+  metabase
+  grafana
+}
+
+enum NivelAcceso {
+  visualizador
+  comentarista
+  editor
+}
+
+enum CanalNotificacion {
+  email
+  slack
+  whatsapp
+}
+
+// ─── Modelos ──────────────────────────────────────────────────────────────────
+
+model Usuario {
+  id               Int          @id @default(autoincrement())
+  nombre           String
+  email            String       @unique
+  password_hash    String
+  tipo_usuario     TipoUsuario  @default(visualizador)
+  telefono         String?
+  avatar_url       String?
+  activo           Boolean      @default(true)
+  email_verificado Boolean      @default(false)
+  ultimo_login     DateTime?
+  created_at       DateTime     @default(now())
+  updated_at       DateTime     @updatedAt
+
+  elaborador       Elaborador?
+  empresas         UsuarioEmpresa[]
+  accesos_dashboard AccesoDashboard[]
+}
+
+model Empresa {
+  id                   Int      @id @default(autoincrement())
+  nombre               String
+  nit                  String   @unique
+  sector               String?
+  tamano               String?
+  plan_activo          String?
+  fecha_contrato       DateTime?
+  representante_email  String?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  usuarios             UsuarioEmpresa[]
+  proyectos            Proyecto[]
+}
+
+model UsuarioEmpresa {
+  usuario_id   Int
+  empresa_id   Int
+  rol_empresa  String   @default("visualizador")
+  created_at   DateTime @default(now())
+
+  usuario      Usuario  @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+  empresa      Empresa  @relation(fields: [empresa_id], references: [id], onDelete: Cascade)
+
+  @@id([usuario_id, empresa_id])
+}
+
+model Elaborador {
+  id                   Int       @id @default(autoincrement())
+  usuario_id           Int       @unique
+  especialidad         String?
+  nivel                String?
+  habilidades          String[]
+  tarifa_hora_usd      Decimal?  @db.Decimal(10, 2)
+  disponible           Boolean   @default(true)
+  calificacion_promedio Decimal  @default(0) @db.Decimal(3, 2)
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  usuario              Usuario   @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+  proyectos            Proyecto[]
+  calificaciones       Calificacion[]
+}
+
+model CatalogoServicio {
+  id                      Int      @id @default(autoincrement())
+  nombre                  String
+  slug                    String   @unique
+  descripcion             String?
+  precio_base_usd         Decimal? @db.Decimal(10, 2)
+  duracion_estimada_dias  Int?
+  tags                    String[]
+  activo                  Boolean  @default(true)
+  created_at              DateTime @default(now())
+
+  servicios_proyecto      ServicioProyecto[]
+}
+
+model Proyecto {
+  id                       Int               @id @default(autoincrement())
+  empresa_id               Int
+  elaborador_id            Int?
+  nombre                   String
+  descripcion              String?
+  estado                   EstadoProyecto    @default(cotizacion)
+  prioridad                PrioridadProyecto @default(media)
+  fecha_inicio             DateTime?
+  fecha_entrega_estimada   DateTime?
+  fecha_entrega_real       DateTime?
+  presupuesto_usd          Decimal?          @db.Decimal(12, 2)
+  horas_trabajadas         Decimal           @default(0) @db.Decimal(8, 2)
+  created_at               DateTime          @default(now())
+  updated_at               DateTime          @updatedAt
+
+  empresa                  Empresa           @relation(fields: [empresa_id], references: [id])
+  elaborador               Elaborador?       @relation(fields: [elaborador_id], references: [id])
+  dashboards               Dashboard[]
+  servicios                ServicioProyecto[]
+  calificaciones           Calificacion[]
+}
+
+model ServicioProyecto {
+  proyecto_id           Int
+  catalogo_servicio_id  Int
+  precio_acordado_usd   Decimal?  @db.Decimal(10, 2)
+  created_at            DateTime  @default(now())
+
+  proyecto              Proyecto         @relation(fields: [proyecto_id], references: [id], onDelete: Cascade)
+  catalogo_servicio     CatalogoServicio @relation(fields: [catalogo_servicio_id], references: [id])
+
+  @@id([proyecto_id, catalogo_servicio_id])
+}
+
+model Dashboard {
+  id                     Int             @id @default(autoincrement())
+  proyecto_id            Int
+  nombre                 String
+  descripcion            String?
+  tipo_herramienta       TipoHerramienta @default(custom_web)
+  url_acceso             String?
+  url_embed              String?
+  frecuencia_actualizacion String?
+  activo                 Boolean         @default(true)
+  created_at             DateTime        @default(now())
+  updated_at             DateTime        @updatedAt
+
+  proyecto               Proyecto        @relation(fields: [proyecto_id], references: [id])
+  accesos                AccesoDashboard[]
+  alertas                Alerta[]
+}
+
+model AccesoDashboard {
+  dashboard_id   Int
+  usuario_id     Int
+  nivel_acceso   NivelAcceso @default(visualizador)
+  created_at     DateTime    @default(now())
+
+  dashboard      Dashboard   @relation(fields: [dashboard_id], references: [id], onDelete: Cascade)
+  usuario        Usuario     @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@id([dashboard_id, usuario_id])
+}
+
+model Alerta {
+  id                  Int               @id @default(autoincrement())
+  dashboard_id        Int
+  nombre              String
+  kpi_monitoreado     String
+  condicion           String
+  valor_umbral        Decimal           @db.Decimal(15, 4)
+  canal_notificacion  CanalNotificacion @default(email)
+  activa              Boolean           @default(true)
+  ultima_disparo      DateTime?
+  created_at          DateTime          @default(now())
+
+  dashboard           Dashboard         @relation(fields: [dashboard_id], references: [id], onDelete: Cascade)
+}
+
+model Calificacion {
+  id                    Int        @id @default(autoincrement())
+  proyecto_id           Int
+  elaborador_id         Int
+  puntaje               Int
+  puntaje_comunicacion  Int?
+  puntaje_calidad       Int?
+  puntaje_tiempo        Int?
+  comentario            String?
+  created_at            DateTime   @default(now())
+
+  proyecto              Proyecto   @relation(fields: [proyecto_id], references: [id])
+  elaborador            Elaborador @relation(fields: [elaborador_id], references: [id])
+}
