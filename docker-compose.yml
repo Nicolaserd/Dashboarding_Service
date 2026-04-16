@@ -1,0 +1,96 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dataflow_db}
+      POSTGRES_USER: ${POSTGRES_USER:-dataflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataflow_secret}
+    # Sin ports: solo accesible internamente por los servicios Docker
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dataflow} -d ${POSTGRES_DB:-dataflow_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Sin ports: solo accesible internamente
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dataflow}:${POSTGRES_PASSWORD:-dataflow_secret}@postgres:5432/${POSTGRES_DB:-dataflow_db}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  celery_worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dataflow}:${POSTGRES_PASSWORD:-dataflow_secret}@postgres:5432/${POSTGRES_DB:-dataflow_db}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - backend
+      - redis
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+  celery_beat:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dataflow}:${POSTGRES_PASSWORD:-dataflow_secret}@postgres:5432/${POSTGRES_DB:-dataflow_db}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - backend
+      - redis
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data:
+  redis_data:
